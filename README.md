@@ -1,4 +1,4 @@
 # BlackBox---Environment-Control
-This project, developed as a project continuation for the Design Laboratory course, provides an environment control system supporting ALICE FIT. Its primary function is to continuously measure essential environmental parameters, including temperature, humidity, and light. To ensure reliable monitoring, the system actively logs data and establishes a seamless connection to the lab infrastructure.
+This project, developed as a project for the Design Laboratory course, provides an environment control system supporting ALICE FIT. Its primary function is to continuously measure essential environmental parameters, including temperature, humidity, and light. To ensure reliable monitoring, the system actively logs data and establishes a seamless connection to the lab infrastructure.
 
 Authors: Przemysław Łukaszyk, Bartłomiej Sokal
