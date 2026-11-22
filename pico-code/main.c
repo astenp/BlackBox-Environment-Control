@@ -30,6 +30,23 @@
 #define HTS221_HUM_OUT_L  0x28
 #define HTS221_TEMP_OUT_L 0x2A
 
+// TSL25721 reg map defines
+#define TSL25721_CMD_SINGLE 0x80 // single byte option for read/write
+#define TSL25721_CMD_AUTOINC 0xA0 // auto increment for multiple bytes
+#define TSL25721_ENABLE 0x00
+#define TSL25721_REG_ATIME 0x01
+#define TSL25721_CONFIG 0x0D
+#define TSL25721_CONTROL 0x0F
+#define TSL25721_C0DATAL 0x14
+
+// TSL25721 value defines
+#define TSL25721_VAL_ATIME 0xDB // set to 219 calculates into around 100ms, which helps with potential flickering problems with 50Hz light sources
+#define TSL25721_GAIN 0x00  // programmable analog gain -> 0x00=1x, 0x01=8x, 0x02=16x, 0x03=120x 
+#define TSL25721_GAIN_VAL 1.0f // this needs to be set to the correct value corresponding to TSL25721_GAIN
+#define TSL25721_GLASS_ATTENUATION 1.0f
+
+// LPS331 reg map defines
+
 // UART defines
 // By default the stdout UART is `uart0`, so we will use the second one
 #define UART_ID uart1
@@ -100,20 +117,132 @@ void STLM75_temp(){
     }
 }
 
-// migrate hts221 helper functions to individual file
-// hts221 helper functions for reading and writing to regs
-uint8_t hts221_write(uint8_t r, uint8_t x){
-    uint8_t buf[] = {r, x},n;
-    n = i2c_write_blocking(I2C_PORT, HTS221_ADDR, buf, 2, false);
-    return n;
+//
+// HTS221 FUNCTIONS
+//
+
+int hts221_write(uint8_t r, uint8_t x){
+    uint8_t buf[2] = {r, x};
+    return i2c_write_blocking(I2C_PORT, HTS221_ADDR, buf, 2, false);
 }
 
-uint8_t hts221_read(uint8_t r, uint8_t *b, uint16_t l){
-    uint8_t n;
+int hts221_read(uint8_t r, uint8_t *b, uint16_t l){
     r |= 0x80; // need auto-increment for multiple byte data
     i2c_write_blocking(I2C_PORT, HTS221_ADDR, &r, 1, true); 
-    n = i2c_read_blocking(I2C_PORT, HTS221_ADDR, b, l, false);
-    return n;
+    return i2c_read_blocking(I2C_PORT, HTS221_ADDR, b, l, false);
+}
+
+// HTS221 humidity calibration
+void hts221_humidityCalib(float *H0_rH_x2, float *H1_rH_x2, int16_t *H0_T0_OUT, int16_t *H1_T0_OUT){
+    // real humidity points
+    uint8_t clbr_rH[2];
+    hts221_read(HTS221_CALIB_0, clbr_rH, 2);
+    *H0_rH_x2 = clbr_rH[0] / 2.0f;
+    *H1_rH_x2 = clbr_rH[1] / 2.0f;
+
+    // measured humidity points
+    uint8_t H0_T0_buf[2], H1_T0_buf[2];
+    hts221_read(0x36,H0_T0_buf,2);
+    hts221_read(0x3A,H1_T0_buf,2);
+    *H0_T0_OUT = (int16_t)((H0_T0_buf[1]<<8) | H0_T0_buf[0]);
+    *H1_T0_OUT = (int16_t)((H1_T0_buf[1]<<8) | H1_T0_buf[0]);
+}
+
+//HTS221 temperature calibration
+void hts221_tempCalib(float *T0_degC, float *T1_degC, int16_t *T0_OUT, int16_t *T1_OUT){
+    // real temperature points
+    // weird 10-bit format 
+    uint8_t T0_degC_x8, T1_degC_x8, T0_T1_msb;
+    hts221_read(0x32, &T0_degC_x8, 1);
+    hts221_read(0x33, &T1_degC_x8, 1);
+    hts221_read(0x35, &T0_T1_msb, 1);
+
+    uint16_t T0_degC_temp = ((T0_T1_msb & 0x03) << 8) | T0_degC_x8;
+    uint16_t T1_degC_temp = ((T0_T1_msb & 0x0C) << 6) | T1_degC_x8;
+
+    *T0_degC = T0_degC_temp / 8.0f;
+    *T1_degC = T1_degC_temp / 8.0f;
+
+    // measured temperature points
+    uint8_t T0_OUT_buf[2], T1_OUT_buf[2];
+    hts221_read(0x3C, T0_OUT_buf, 2);
+    hts221_read(0x3E, T1_OUT_buf, 2);
+    *T0_OUT = (int16_t)((T0_OUT_buf[1] << 8) | T0_OUT_buf[0]);
+    *T1_OUT = (int16_t)((T1_OUT_buf[1] << 8) | T1_OUT_buf[0]);
+}
+
+// need calibration before running temp or humidity readings
+float hts221_readTemp(float T0_degC, float T1_degC, int16_t T0_OUT, int16_t T1_OUT){
+    uint8_t t_data[2] = {0, 0};
+
+    hts221_read(HTS221_TEMP_OUT_L, t_data, 2); 
+
+    int T_read = (int16_t)((t_data[1] << 8) | t_data[0]);
+    // linear interpolation for sensor read value
+    float temperature = T0_degC + (T1_degC - T0_degC) * (float)(T_read - T0_OUT) / (float)(T1_OUT - T0_OUT);
+    return temperature;
+}
+
+float hts221_readHumidity(float H0_rH_x2, float H1_rH_x2, int16_t H0_T0_OUT, int16_t H1_T0_OUT){
+    uint8_t h_data[2] = {0, 0};
+
+    hts221_read(HTS221_HUM_OUT_L, h_data, 2); 
+
+    int H_read = (int16_t)((h_data[1] << 8) | h_data[0]);
+    // linear interpolation for sensor read value
+    float humidity = H0_rH_x2 + (H1_rH_x2 - H0_rH_x2) * (float)(H_read - H0_T0_OUT) / (float)(H1_T0_OUT - H0_T0_OUT);
+    return humidity;
+}
+
+//
+// TSL25721 FUNCTIONS
+//
+
+int tsl25721_write(uint8_t r, uint8_t x){
+    uint8_t buf[2] = {(uint8_t)(TSL25721_CMD_SINGLE | r), x};
+    return i2c_write_blocking(I2C_PORT, TSL25721_ADDR, buf, 2, false);
+}
+
+int tsl25721_read(uint8_t r, uint8_t *b, uint16_t l){
+    r |= 0xA0;
+    i2c_write_blocking(I2C_PORT, TSL25721_ADDR, &r, 1, true);
+    return i2c_read_blocking(I2C_PORT, TSL25721_ADDR, b, l, false);
+}
+
+void tsl25721_init(){
+    // TSL25721 init
+    // disable sensor for configuration
+    tsl25721_write(TSL25721_ENABLE, 0x00);
+
+    tsl25721_write(TSL25721_REG_ATIME, TSL25721_VAL_ATIME); // integration time -> tint = (256 - ATIME) * 2.73ms
+    tsl25721_write(TSL25721_CONFIG, 0x00); // additional config needs to be 0 for 120x AGAIN
+    tsl25721_write(TSL25721_CONTROL, TSL25721_GAIN);
+
+    // enable sensor after configuration
+    tsl25721_write(TSL25721_ENABLE, 0x01); // enable generator PON=1 | AEN=0
+    sleep_ms(5); // minimal time stabilization time for generator is 2,73ms
+    tsl25721_write(TSL25721_ENABLE, 0x03); // enable sensor PON=1 | AEN=1
+
+}
+
+float tsl25721_readLux(){
+    uint8_t data[4] = {0,0,0,0};
+    tsl25721_read(TSL25721_C0DATAL, data, 4);
+
+    uint16_t raw0 = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+    uint16_t raw1 = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+
+    float atime = (256.0f - (float)TSL25721_VAL_ATIME) * 2.73f; // ms
+    float cpl = (atime * TSL25721_GAIN_VAL) / (TSL25721_GLASS_ATTENUATION * 60.0f); 
+
+    float lux1 = ((float)raw0 - 1.87f * (float)raw1)/cpl;
+    float lux2 = (0.63f * (float)raw0 - 1.0f * (float)raw1)/cpl;
+
+    float lux = 0.0f;
+    if (lux1 > lux) lux = lux1;
+    if (lux2 > lux) lux = lux2;
+
+    return lux;
 }
 
 int main()
@@ -126,83 +255,48 @@ int main()
     
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
-    //nucleo has built in pull-up resistors
+    // nucleo expander has built in pull-up resistors
     //gpio_pull_up(I2C_SDA);
     //gpio_pull_up(I2C_SCL);
 
     // UART setup
-    uart_init(UART_ID, BAUD_RATE);
-    // Set the TX and RX pins by using the function select on the GPIO
-    // Set datasheet for more information on function select
-    // gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    // gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    //uart_init(UART_ID, BAUD_RATE);
+    //gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    //gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
     
-    // Use some the various UART functions to send out data
-    // In a default system, printf will also output via the default UART
-    
-    // Send out a string, with CR/LF conversions
     //uart_puts(UART_ID, " Hello, UART!\n");
 
     hts221_write(HTS221_CTRL_REG1, 0x85); // wake up hts221 PD=1 BDU=1 ODR=1Hz
 
-    // HTS221 humidity calibration
-    // real humidity points
-    uint8_t clbr_rH[2];
-    hts221_read(HTS221_CALIB_0, clbr_rH, 2);
-    float H0_rH_x2 = clbr_rH[0] / 2.0f;
-    float H1_rH_x2 = clbr_rH[1] / 2.0f;
+    // HTS221 calibration
+    float H0_rH_x2;
+    float H1_rH_x2;
+    int16_t H0_T0_OUT;
+    int16_t H1_T0_OUT;
+    hts221_humidityCalib(&H0_rH_x2, &H1_rH_x2, &H0_T0_OUT, &H1_T0_OUT);
 
-    // measured humidity points
-    uint8_t H0_T0_buf[2], H1_T0_buf[2];
-    hts221_read(0x36,H0_T0_buf,2);
-    hts221_read(0x3A,H1_T0_buf,2);
-    int16_t H0_T0_OUT = (int16_t)((H0_T0_buf[1]<<8) | H0_T0_buf[0]);
-    int16_t H1_T0_OUT = (int16_t)((H1_T0_buf[1]<<8) | H1_T0_buf[0]);
+    float T0_degC;
+    float T1_degC;
+    int16_t T0_OUT;
+    int16_t T1_OUT;
+    hts221_tempCalib(&T0_degC, &T1_degC, &T0_OUT, &T1_OUT);
 
-    //HTS221 temperature calibration
-    // real temperature points
-    // weird 10-bit format 
-    uint8_t T0_degC_x8, T1_degC_x8, T0_T1_msb;
-    hts221_read(0x32, &T0_degC_x8, 1);
-    hts221_read(0x33, &T1_degC_x8, 1);
-    hts221_read(0x35, &T0_T1_msb, 1);
-
-    uint16_t T0_degC_temp = ((T0_T1_msb & 0x03) << 8) | T0_degC_x8;
-    uint16_t T1_degC_temp = ((T0_T1_msb & 0x0C) << 6) | T1_degC_x8;
-
-    float T0_degC = T0_degC_temp / 8.0f;
-    float T1_degC = T1_degC_temp / 8.0f;
-
-    // measured temperature points
-    uint8_t T0_OUT_buf[2], T1_OUT_buf[2];
-    hts221_read(0x3C, T0_OUT_buf, 2);
-    hts221_read(0x3E, T1_OUT_buf, 2);
-    int16_t T0_OUT = (int16_t)((T0_OUT_buf[1] << 8) | T0_OUT_buf[0]);
-    int16_t T1_OUT = (int16_t)((T1_OUT_buf[1] << 8) | T1_OUT_buf[0]);
-
+    tsl25721_init();
 
     while (true) {
 
-        // HTS221 data reading and conversion to real value
-        uint8_t h_data[2] = {0, 0};
-        uint8_t t_data[2] = {0, 0};
-        uint8_t n,m;
+        printf("------------------\n");
+        
+        float h = hts221_readHumidity(H0_rH_x2,H1_rH_x2,H0_T0_OUT,H1_T0_OUT);
+        float t = hts221_readTemp(T0_degC, T1_degC, T0_OUT, T1_OUT);
 
-        n = hts221_read(HTS221_HUM_OUT_L, h_data, 2); 
-        //printf("%d\n",n);
-        m = hts221_read(HTS221_TEMP_OUT_L, t_data, 2); 
-        //printf("%d\n",m);
-
-        //printf("h_r : %d  t_r: %d \n", n,m);
-
-        int H_read = (int16_t)((h_data[1] << 8) | h_data[0]);
-        int T_read = (int16_t)((t_data[1] << 8) | t_data[0]);
-
-        // linear interpolation calc for value from sensor
-        float humidity = H0_rH_x2 + (H1_rH_x2 - H0_rH_x2) * (float)(H_read - H0_T0_OUT) / (float)(H1_T0_OUT - H0_T0_OUT);
-        float temperature = T0_degC + (T1_degC - T0_degC) * (float)(T_read - T0_OUT) / (float)(T1_OUT - T0_OUT);
-
-        printf("h: %f  t: %f \n", humidity, temperature);
+        printf("HTS221 READ: humidity: %f  temperature: %f \n", h, t);
+      
+        //sleep_ms(150);
+        
+        float lux = tsl25721_readLux();
+        
+        printf("TSL25721 READ: lux: %f\n",lux);
 
         sleep_ms(1000);
         }
