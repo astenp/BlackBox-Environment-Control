@@ -15,12 +15,12 @@ Create a frontend user interface that displays live and historical data.
 Test and validation of the complete system.
 
 ## Project Progress:
-5.11.2026:
-  Defined project milestones
-  Compared sensor options to find a good fit for the project
-12.11.2026:
-  Received and familiarized ourselves with the Raspberry Pico platform and Kamami sensor dev board
-  Prototyped simple I2C polling code to verify communication and learn how the sensors behave
-19.11.2026:
-  Implemented temperature, humidity and light intensity sensor logic and moved all sensor code into seperate files
-  Creating a code outline for the server and measurement platform
+5.11.2026: <br />
+&emsp; Defined project milestones <br />
+&emsp; Compared sensor options to find a good fit for the project <br /> <br />
+12.11.2026: <br />
+&emsp; Received and familiarized ourselves with the Raspberry Pico platform and Kamami sensor dev board <br />
+&emsp; Prototyped simple I2C polling code to verify communication and learn how the sensors behave <br /> <br />
+19.11.2026: <br />
+&emsp; Implemented temperature, humidity and light intensity sensor logic and moved all sensor code into seperate files <br />
+&emsp; Creating a code outline for the server and measurement platform <br />
