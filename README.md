@@ -17,3 +17,7 @@ Test and validation of the complete system.
 ## Project Progress:
 5.11.2026:
   Define project milestones
+12.11.2026:
+  Receiving and familiarization with the Raspberry Pico platform
+19.11.2026:
+  Creating a code outline for the server and measurement platform
