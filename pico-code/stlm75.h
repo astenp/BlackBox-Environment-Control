@@ -1,0 +1,1 @@
+float stlm75_temp();
